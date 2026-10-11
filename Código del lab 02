@@ -1,0 +1,348 @@
+// ============================================
+// LABORATORIO 2
+// Sensor de presion MPS20N0040D + HX710B + ESP32
+// Taller de Equipos Biomedicos II
+// ============================================
+
+
+#include <Arduino.h>
+#include <math.h>
+
+
+// -------- CONEXION HX710B --------
+
+#define DOUT 18
+#define SCK  19
+
+
+
+// -------- PARAMETROS CONFIGURABLES --------
+
+float Patm = 101.3;   // Presion atmosferica kPa
+float V0 = 1.00;      // Volumen inicial jeringa mL
+float Vm = 0.60;      // Volumen muerto provisional mL
+
+float Pmax = 35.0;    // Presion maxima segura kPa
+
+
+const int N = 20;     // Numero de lecturas por punto
+
+
+
+// ============================================
+// LECTURA DEL HX710B
+// ============================================
+
+long leerHX710B()
+{
+
+  while(digitalRead(DOUT) == HIGH)
+  {
+    delay(1);
+  }
+
+
+  long valor = 0;
+
+
+  for(int i=0;i<24;i++)
+  {
+
+    digitalWrite(SCK,HIGH);
+    delayMicroseconds(1);
+
+
+    valor = valor << 1;
+
+
+    digitalWrite(SCK,LOW);
+    delayMicroseconds(1);
+
+
+    if(digitalRead(DOUT))
+    {
+      valor++;
+    }
+
+  }
+
+
+  // Pulso adicional
+  digitalWrite(SCK,HIGH);
+  delayMicroseconds(1);
+  digitalWrite(SCK,LOW);
+
+
+
+  // Conversion signo 24 bits
+
+  if(valor & 0x800000)
+  {
+    valor |= 0xFF000000;
+  }
+
+
+  return valor;
+
+}
+
+
+
+// ============================================
+// PROMEDIO Y DESVIACION
+// ============================================
+
+void leerPromedio(float &media, float &desviacion)
+{
+
+  long datos[N];
+
+  long suma = 0;
+
+
+
+  for(int i=0;i<N;i++)
+  {
+
+    datos[i] = leerHX710B();
+
+    suma += datos[i];
+
+    delay(50);
+
+  }
+
+
+
+  media = suma/(float)N;
+
+
+
+  float error = 0;
+
+
+
+  for(int i=0;i<N;i++)
+  {
+
+    error += pow(datos[i]-media,2);
+
+  }
+
+
+
+  desviacion = sqrt(error/N);
+
+}
+
+
+
+// ============================================
+// CALCULO DE PRESION LEY DE BOYLE
+// ============================================
+
+float calcularPresion(float Vj)
+{
+
+  float Pref;
+
+
+  Pref = Patm * ((V0 - Vj)/(Vj + Vm));
+
+
+  return Pref;
+
+}
+
+
+
+// ============================================
+// CALCULO MARCA DE PARADA
+// ============================================
+
+float calcularVmin()
+{
+
+  float r = Pmax/Patm;
+
+
+  float Vmin;
+
+
+  Vmin = (V0 - r*Vm)/(1+r);
+
+
+  return Vmin;
+
+}
+
+
+
+// ============================================
+// SETUP
+// ============================================
+
+void setup()
+{
+
+  Serial.begin(115200);
+
+
+  pinMode(DOUT,INPUT);
+
+  pinMode(SCK,OUTPUT);
+
+
+  digitalWrite(SCK,LOW);
+
+
+
+  Serial.println();
+  Serial.println("HX710B iniciado");
+
+
+  Serial.print("Vj minimo = ");
+
+  Serial.print(calcularVmin());
+
+  Serial.println(" mL");
+
+
+
+  Serial.println();
+
+  Serial.println("Formato:");
+
+  Serial.println("ciclo,sentido,Vj");
+
+
+  Serial.println("Ejemplo:");
+
+  Serial.println("1,COMP,0.88");
+
+}
+
+
+
+// ============================================
+// LOOP
+// ============================================
+
+void loop()
+{
+
+
+  float media;
+
+  float desviacion;
+
+
+
+  // Lectura del sensor
+
+  leerPromedio(media,desviacion);
+
+
+
+  // Recibir datos desde Monitor Serie
+
+  if(Serial.available())
+  {
+
+
+    String dato = Serial.readStringUntil('\n');
+
+
+
+    int coma1 = dato.indexOf(',');
+
+    int coma2 = dato.indexOf(',',coma1+1);
+
+
+
+    if(coma1>0 && coma2>0)
+    {
+
+
+      int ciclo = dato.substring(0,coma1).toInt();
+
+
+      String sentido = dato.substring(coma1+1,coma2);
+
+
+      float Vj = dato.substring(coma2+1).toFloat();
+
+
+
+      if(Vj <= 0 || Vj > V0)
+      {
+
+        Serial.println("ERROR: Vj fuera de rango");
+
+        return;
+
+      }
+
+
+
+      float Pref = calcularPresion(Vj);
+
+
+
+      if(Pref > 40)
+      {
+
+        Serial.println("ERROR: Presion mayor a 40 kPa");
+
+        return;
+
+      }
+
+
+
+      // SALIDA CSV
+
+      Serial.print(ciclo);
+
+      Serial.print(",");
+
+
+      Serial.print(sentido);
+
+      Serial.print(",");
+
+
+      Serial.print(Vj,2);
+
+      Serial.print(",");
+
+
+      Serial.print(Pref,3);
+
+      Serial.print(",");
+
+
+      Serial.print(media);
+
+      Serial.print(",");
+
+
+      Serial.print(desviacion);
+
+      Serial.print(",");
+
+
+      Serial.println(N);
+
+
+
+    }
+
+
+  }
+
+
+  delay(500);
+
+
+}
